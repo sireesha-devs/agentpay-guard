@@ -1,5 +1,4 @@
-# Dependencies will be listed here in a future task.
-@"
 pydantic
 pytest
-"@ | Set-Content backend\requirements.txt
+fastapi
+httpx
