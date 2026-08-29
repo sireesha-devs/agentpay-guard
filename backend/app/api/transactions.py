@@ -13,20 +13,29 @@ class TransactionCreateRequest(BaseModel):
     """The buyer and seller constraints needed to run one transaction flow."""
 
     transaction_id: str = Field(default="transaction-1", min_length=1)
-    buyer_id: str
+    buyer_id: str = Field(min_length=1)
     quantity: int = Field(gt=0)
     max_budget: float = Field(gt=0)
-    currency: str
+    currency: str = Field(min_length=1)
     minimum_refund_days: int = Field(ge=0)
-    seller_id: str
+    seller_id: str = Field(min_length=1)
     unit_price: float = Field(gt=0)
-    seller_currency: str
+    seller_currency: str = Field(min_length=1)
     refund_days: int = Field(ge=0)
-    terms: str
+    terms: str = Field(min_length=1)
     max_rounds: int = Field(default=3, ge=1)
 
 
-@router.post("/transactions", response_model=TransactionResult)
+@router.post(
+    "/transactions",
+    response_model=TransactionResult,
+    summary="Run a deterministic transaction",
+    description=(
+        "Creates buyer and seller agents and delegates the transaction flow to the "
+        "existing deterministic orchestrator."
+    ),
+    responses={422: {"description": "Request validation failed."}},
+)
 def create_transaction(request: TransactionCreateRequest) -> TransactionResult:
     """Run the existing deterministic transaction flow for the supplied constraints."""
     buyer_agent = BuyerAgent(
