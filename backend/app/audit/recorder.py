@@ -1,33 +1,47 @@
 import hashlib
 import json
 from copy import deepcopy
+from typing import Optional
 
 from backend.app.audit.models import AuditRecord
+from backend.app.audit.store import AuditStore
 
 
 class AuditRecorder:
-    """In-memory append-only recorder for validated audit events."""
+    """
+    Tamper-evident audit recorder.
 
-    def __init__(self) -> None:
+    Events are kept in memory for fast access and optionally persisted
+    through AuditStore for durability.
+    """
+
+    def __init__(
+        self,
+        store: Optional[AuditStore] = None,
+    ) -> None:
         self._events: list[AuditRecord] = []
+        self._store = store
 
     def record(self, audit_record: AuditRecord) -> AuditRecord:
-        """Record an audit event without mutating the caller's record."""
+        """Record and optionally persist one audit event."""
         if not isinstance(audit_record, AuditRecord):
             raise TypeError("audit_record must be an AuditRecord")
 
-        # Work on a deep copy so the caller's object remains unchanged.
-        recorded= deepcopy(audit_record)
+        recorded = deepcopy(audit_record)
 
-        # Link this event to the previous event in the append-only chain.
         recorded.previous_event_hash = (
-        self._events[-1].event_hash if self._events else None
-       )
+            self._events[-1].event_hash
+            if self._events
+            else None
+        )
 
-        # Calculate the hash after setting previous_event_hash.
         recorded.event_hash = self._compute_event_hash(recorded)
 
         self._events.append(recorded)
+
+        if self._store is not None:
+            self._store.append(recorded)
+
         return recorded
 
     @staticmethod
@@ -47,15 +61,34 @@ class AuditRecorder:
         return hashlib.sha256(canonical_data).hexdigest()
 
     def verify_chain(self) -> bool:
-        """Verify that every recorded event belongs to an intact hash chain."""
+        """Verify the in-memory audit hash chain."""
         previous_hash = None
 
         for event in self._events:
-            # The first event must not reference a previous event.
             if event.previous_event_hash != previous_hash:
                 return False
 
-            # Recalculate the event hash from its contents.
+            expected_hash = self._compute_event_hash(event)
+
+            if event.event_hash != expected_hash:
+                return False
+
+            previous_hash = event.event_hash
+
+        return True
+
+    def verify_persisted_chain(self) -> bool:
+        """Verify the persisted audit chain."""
+        if self._store is None:
+            return self.verify_chain()
+
+        events = self._store.all_events()
+        previous_hash = None
+
+        for event in events:
+            if event.previous_event_hash != previous_hash:
+                return False
+
             expected_hash = self._compute_event_hash(event)
 
             if event.event_hash != expected_hash:
@@ -66,7 +99,7 @@ class AuditRecorder:
         return True
 
     def get_events(self, transaction_id: str) -> list[AuditRecord]:
-        """Return recorded events belonging to one transaction."""
+        """Return in-memory events for a transaction."""
         if not transaction_id:
             raise ValueError("transaction_id must be non-empty")
 
@@ -77,5 +110,12 @@ class AuditRecorder:
         ]
 
     def all_events(self) -> list[AuditRecord]:
-        """Return all recorded events in insertion order."""
+        """Return all in-memory events in insertion order."""
         return list(self._events)
+
+    def persisted_events(self) -> list[AuditRecord]:
+        """Return all persisted events."""
+        if self._store is None:
+            return []
+
+        return self._store.all_events()
