@@ -1,3 +1,5 @@
+from backend.app.guards.budget import BudgetGuard
+from backend.app.guards.velocity import VelocityGuard
 import pytest
 
 from backend.app.agents.buyer import BuyerAgent
@@ -138,3 +140,88 @@ def test_final_transaction_contains_purchase_request_and_accepted_offer(
     assert result.transaction.purchase_request.buyer_id == "buyer-1"
     assert result.transaction.accepted_offer is not None
     assert result.transaction.accepted_offer.seller_id == "seller-1"
+def test_budget_guard_blocks_transaction_before_payment(
+    buyer_agent,
+    successful_seller_agent,
+):
+    budget_guard = BudgetGuard(500.0)
+
+    orchestrator = AgentPayOrchestrator(
+        buyer_agent,
+        successful_seller_agent,
+        budget_guard=budget_guard,
+    )
+
+    result = orchestrator.run("tx-budget-blocked")
+
+    assert result.payment_status == "failed"
+    assert result.transaction.payment_status == "failed"
+    assert "budget" in result.message.lower()
+    assert budget_guard.spent_amount == 0.0
+
+
+def test_budget_guard_records_successful_payment(
+    buyer_agent,
+    successful_seller_agent,
+):
+    budget_guard = BudgetGuard(50000.0)
+
+    orchestrator = AgentPayOrchestrator(
+        buyer_agent,
+        successful_seller_agent,
+        budget_guard=budget_guard,
+    )
+
+    result = orchestrator.run("tx-budget-success")
+
+    assert result.payment_status == "CAPTURED"
+    assert budget_guard.spent_amount == 800.0
+    assert budget_guard.remaining_budget() == 49200.0
+
+
+def test_velocity_guard_blocks_transaction_before_payment(
+    buyer_agent,
+    successful_seller_agent,
+):
+    velocity_guard = VelocityGuard(
+        max_transactions=1,
+        window_seconds=60,
+    )
+
+    velocity_guard.record_execution("buyer-1")
+
+    orchestrator = AgentPayOrchestrator(
+        buyer_agent,
+        successful_seller_agent,
+        velocity_guard=velocity_guard,
+    )
+
+    result = orchestrator.run("tx-velocity-blocked")
+
+    assert result.payment_status == "failed"
+    assert result.transaction.payment_status == "failed"
+    assert "velocity" in result.message.lower()
+
+
+def test_guards_allow_transaction_when_all_checks_pass(
+    buyer_agent,
+    successful_seller_agent,
+):
+    budget_guard = BudgetGuard(50000.0)
+    velocity_guard = VelocityGuard(
+        max_transactions=5,
+        window_seconds=60,
+    )
+
+    orchestrator = AgentPayOrchestrator(
+        buyer_agent,
+        successful_seller_agent,
+        budget_guard=budget_guard,
+        velocity_guard=velocity_guard,
+    )
+
+    result = orchestrator.run("tx-guards-pass")
+
+    assert result.payment_status == "CAPTURED"
+    assert budget_guard.spent_amount == 800.0
+    assert velocity_guard.current_count("buyer-1") == 1

@@ -6,13 +6,12 @@ from pydantic import BaseModel, Field, validator
 
 
 class ExecutionState(str, Enum):
-    """The recorded state of a transaction execution attempt."""
-
     PENDING = "PENDING"
     AUTHORIZED = "AUTHORIZED"
     CAPTURED = "CAPTURED"
     FAILED = "FAILED"
     BLOCKED = "BLOCKED"
+    FAILED_GUARD_CHECK = "FAILED_GUARD_CHECK"
 
 
 class AuditRecord(BaseModel):

@@ -6,6 +6,10 @@ from backend.app.agents.buyer import BuyerAgent
 from backend.app.agents.seller import SellerAgent
 from backend.app.audit.models import AuditRecord, ExecutionState
 from backend.app.audit.recorder import AuditRecorder
+from backend.app.guards.budget import BudgetGuard
+from backend.app.guards.pipeline import GuardPipeline
+from backend.app.guards.risk import TransactionPayload
+from backend.app.guards.velocity import VelocityGuard
 from backend.app.models.transaction import (
     Offer,
     PolicyResult,
@@ -36,11 +40,17 @@ class AgentPayOrchestrator:
         seller_agent: SellerAgent,
         max_rounds: int = 3,
         audit_recorder: Optional[AuditRecorder] = None,
+        budget_guard: Optional[BudgetGuard] = None,
+        velocity_guard: Optional[VelocityGuard] = None,
+        guard_pipeline: Optional[GuardPipeline] = None,
     ) -> None:
         self._buyer_agent = buyer_agent
         self._seller_agent = seller_agent
         self._max_rounds = max_rounds
         self._audit_recorder = audit_recorder
+        self._budget_guard = budget_guard
+        self._velocity_guard = velocity_guard
+        self._guard_pipeline = guard_pipeline
 
     def _record_audit(
         self,
@@ -180,6 +190,114 @@ class AgentPayOrchestrator:
             accepted_offer=accepted_offer,
             payment_status="pending",
         )
+        transaction_amount = (
+            accepted_offer.quantity * accepted_offer.unit_price
+        )
+
+        if self._guard_pipeline is not None:
+            guard_payload = TransactionPayload(
+                amount=transaction_amount,
+                currency=purchase_request.currency,
+                merchant_id=accepted_offer.seller_id,
+                item_category="general",
+            )
+
+            guard_result = self._guard_pipeline.evaluate(
+                guard_payload,
+                agent_id=purchase_request.buyer_id,
+            )
+
+            if not guard_result.allowed:
+                transaction.payment_status = "failed"
+
+                failed_check = guard_result.checks[-1]
+
+                policy_result = PolicyResult(
+                    approved=False,
+                    reason=(
+                        f"Transaction blocked by {failed_check.guard_name} guard: "
+                        f"{failed_check.message}"
+                    ),
+                    violations=[failed_check.reason_code],
+                )
+
+                transaction.policy_result = policy_result
+
+                self._record_audit(
+                    transaction_id=transaction_id,
+                    purchase_request=purchase_request,
+                    execution_state=ExecutionState.BLOCKED,
+                    payment_status="failed",
+                    failure_message=policy_result.reason,
+                )
+
+                return TransactionResult(
+                    transaction=transaction,
+                    negotiation_status=negotiation_status,
+                    policy_result=policy_result,
+                    payment_status="failed",
+                    message=policy_result.reason,
+                )
+
+        if (
+            self._budget_guard is not None
+            and not self._budget_guard.can_spend(transaction_amount)
+        ):
+            transaction.payment_status = "failed"
+
+            policy_result = PolicyResult(
+                approved=False,
+                reason="Transaction blocked because the budget guard rejected the transaction.",
+                violations=["Transaction exceeds the remaining budget."],
+            )
+
+            transaction.policy_result = policy_result
+
+            self._record_audit(
+                transaction_id=transaction_id,
+                purchase_request=purchase_request,
+                execution_state=ExecutionState.BLOCKED,
+                payment_status="failed",
+                failure_message=policy_result.reason,
+            )
+
+            return TransactionResult(
+                transaction=transaction,
+                negotiation_status=negotiation_status,
+                policy_result=policy_result,
+                payment_status="failed",
+                message="Transaction was blocked by the budget guard; payment was not attempted.",
+            )
+
+        if (
+            self._velocity_guard is not None
+            and not self._velocity_guard.can_execute(purchase_request.buyer_id)
+        ):
+            transaction.payment_status = "failed"
+
+            policy_result = PolicyResult(
+                approved=False,
+                reason="Transaction blocked because the velocity guard rejected the transaction.",
+                violations=["Agent exceeded the transaction velocity limit."],
+            )
+
+            transaction.policy_result = policy_result
+
+            self._record_audit(
+                transaction_id=transaction_id,
+                purchase_request=purchase_request,
+                execution_state=ExecutionState.BLOCKED,
+                payment_status="failed",
+                failure_message=policy_result.reason,
+            )
+
+            return TransactionResult(
+                transaction=transaction,
+                negotiation_status=negotiation_status,
+                policy_result=policy_result,
+                payment_status="failed",
+                message="Transaction was blocked by the velocity guard; payment was not attempted.",
+            )
 
         policy_result = PolicyEngine().evaluate(
             purchase_request,
@@ -222,6 +340,15 @@ class AgentPayOrchestrator:
             execution_state = ExecutionState.CAPTURED
         else:
             execution_state = ExecutionState.FAILED
+
+        if execution_state == ExecutionState.CAPTURED:
+            if self._budget_guard is not None:
+                self._budget_guard.record_spend(transaction_amount)
+
+            if self._velocity_guard is not None:
+                self._velocity_guard.record_execution(
+                    purchase_request.buyer_id
+                )
 
         self._record_audit(
             transaction_id=transaction_id,
