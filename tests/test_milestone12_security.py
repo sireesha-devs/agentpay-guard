@@ -56,7 +56,10 @@ def test_buyer_api_key_is_authorized(client):
     response = client.post(
         "/transactions",
         json=valid_payload(),
-        headers={"X-API-Key": "buyer-demo-key"},
+        headers={
+            "X-API-Key": "buyer-demo-key",
+            "Idempotency-Key": "m12-buyer-auth",
+        },
     )
 
     assert response.status_code == 200
@@ -66,7 +69,10 @@ def test_admin_api_key_is_authorized(client):
     response = client.post(
         "/transactions",
         json=valid_payload(),
-        headers={"X-API-Key": "admin-demo-key"},
+        headers={
+            "X-API-Key": "admin-demo-key",
+            "Idempotency-Key": "m12-admin-auth",
+        },
     )
 
     assert response.status_code == 200
@@ -115,7 +121,9 @@ def test_health_does_not_require_api_key(client):
 
 
 def test_rate_limit_returns_429(client):
-    headers = {"X-API-Key": "buyer-demo-key"}
+    headers = {
+        "X-API-Key": "buyer-demo-key",
+    }
 
     for index in range(30):
         payload = valid_payload()
@@ -124,7 +132,10 @@ def test_rate_limit_returns_429(client):
         response = client.post(
             "/transactions",
             json=payload,
-            headers=headers,
+            headers={
+                **headers,
+                "Idempotency-Key": f"rate-limit-{index}",
+            },
         )
 
         assert response.status_code == 200
@@ -135,7 +146,10 @@ def test_rate_limit_returns_429(client):
     response = client.post(
         "/transactions",
         json=payload,
-        headers=headers,
+        headers={
+            **headers,
+            "Idempotency-Key": "rate-limit-blocked",
+        },
     )
 
     assert response.status_code == 429

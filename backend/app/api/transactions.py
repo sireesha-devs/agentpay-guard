@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import math
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.app.agents.buyer import BuyerAgent
 from backend.app.agents.seller import SellerAgent
+from backend.app.idempotency.store import idempotency_store
+from backend.app.background import process_transaction_post_processing
 from backend.app.orchestration.service import AgentPayOrchestrator, TransactionResult
 from backend.app.security.auth import authenticate
 
@@ -124,35 +126,83 @@ def buyer_or_admin(
     responses={
         401: {"description": "Missing or invalid API key."},
         403: {"description": "Insufficient role permissions."},
+        409: {"description": "Transaction with this idempotency key is already processing."},
         422: {"description": "Request validation failed."},
         429: {"description": "Rate limit exceeded."},
     },
 )
 def create_transaction(
     request: TransactionCreateRequest,
+    background_tasks: BackgroundTasks,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
     role: str = Depends(buyer_or_admin),
+    idempotency_key: str | None = Header(
+        default=None,
+        alias="Idempotency-Key",
+    ),
 ) -> TransactionResult:
-    """Run the existing deterministic transaction flow."""
-    buyer_agent = BuyerAgent(
-        buyer_id=request.buyer_id,
-        quantity=request.quantity,
-        max_budget=request.max_budget,
-        currency=request.currency,
-        minimum_refund_days=request.minimum_refund_days,
-    )
+    """Run a deterministic transaction with idempotency protection."""
 
-    seller_agent = SellerAgent(
-        seller_id=request.seller_id,
-        unit_price=request.unit_price,
-        refund_days=request.refund_days,
-        currency=request.seller_currency,
-        terms=request.terms,
-    )
+    if not idempotency_key or not idempotency_key.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Idempotency-Key header is required",
+        )
 
-    orchestrator = AgentPayOrchestrator(
-        buyer_agent,
-        seller_agent,
-        max_rounds=request.max_rounds,
-    )
+    key = f"transaction:{x_api_key}:{idempotency_key.strip()}"
 
-    return orchestrator.run(request.transaction_id)
+    existing = idempotency_store.get(key)
+
+    if existing is not None:
+        if existing.status == "COMPLETED":
+            return existing.response
+
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Transaction with this idempotency key is already processing",
+        )
+
+    if not idempotency_store.reserve(key):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Transaction with this idempotency key is already processing",
+        )
+
+    try:
+        buyer_agent = BuyerAgent(
+            buyer_id=request.buyer_id,
+            quantity=request.quantity,
+            max_budget=request.max_budget,
+            currency=request.currency,
+            minimum_refund_days=request.minimum_refund_days,
+        )
+
+        seller_agent = SellerAgent(
+            seller_id=request.seller_id,
+            unit_price=request.unit_price,
+            refund_days=request.refund_days,
+            currency=request.seller_currency,
+            terms=request.terms,
+        )
+
+        orchestrator = AgentPayOrchestrator(
+            buyer_agent,
+            seller_agent,
+            max_rounds=request.max_rounds,
+        )
+
+        result = orchestrator.run(request.transaction_id)
+
+        idempotency_store.complete(key, result)
+
+        background_tasks.add_task(
+            process_transaction_post_processing,
+            request.transaction_id,
+            result,
+        )
+
+        return result
+
+    except Exception:
+        idempotency_store.remove(key)
+        raise

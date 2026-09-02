@@ -29,7 +29,9 @@ def valid_payload() -> dict[str, object]:
 
 
 def test_valid_transaction_still_returns_200(client):
-    response = client.post("/transactions", json=valid_payload())
+    response = client.post("/transactions",
+                            json=valid_payload(),
+                            headers={"Idempotency-Key": "hardening-valid"},)
 
     assert response.status_code == 200
 
@@ -64,7 +66,9 @@ def test_over_budget_transaction_keeps_business_outcome(client):
     payload = valid_payload()
     payload["unit_price"] = 600.0
 
-    response = client.post("/transactions", json=payload)
+    response = client.post("/transactions",
+                            json=payload,
+                            headers={"Idempotency-Key": "hardening-over-budget"},)
 
     assert response.status_code == 200
     assert response.json()["negotiation_status"] == "REJECTED"
@@ -75,7 +79,9 @@ def test_currency_mismatch_reaches_policy_and_is_not_captured(client):
     payload = valid_payload()
     payload["seller_currency"] = "USD"
 
-    response = client.post("/transactions", json=payload)
+    response = client.post("/transactions",
+                            json=payload,
+                            headers={"Idempotency-Key": "hardening-currency"},)
 
     body = response.json()
     assert response.status_code == 200
@@ -91,7 +97,9 @@ def test_health_endpoint_still_returns_200(client):
 
 
 def test_successful_transaction_response_structure_is_unchanged(client):
-    response = client.post("/transactions", json=valid_payload())
+    response = client.post("/transactions",
+                            json=valid_payload(),
+                            headers={"Idempotency-Key": "hardening-response"},)
 
     assert response.status_code == 200
     assert {
