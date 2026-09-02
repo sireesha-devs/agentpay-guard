@@ -6,7 +6,10 @@ from backend.app.main import app
 
 @pytest.fixture
 def client() -> TestClient:
-    return TestClient(app)
+    return TestClient(
+    app,
+    headers={"X-API-Key": "buyer-demo-key"},
+)
 
 
 def valid_payload() -> dict[str, object]:
