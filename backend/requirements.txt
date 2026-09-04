@@ -7,3 +7,5 @@ prometheus-client
 ruff==0.12.0
 mypy
 bandit
+razorpay
+openai
