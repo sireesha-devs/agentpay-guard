@@ -3,15 +3,19 @@ from __future__ import annotations
 import logging
 import time
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
-
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from backend.app.api import router
 from backend.app.security.logging import (
     configure_logging,
     request_log_data,
 )
 from backend.app.security.rate_limit import rate_limiter
+from backend.app.metrics import (
+    HTTP_REQUESTS_TOTAL,
+    HTTP_REQUEST_DURATION_SECONDS,
+)
 
 
 configure_logging()
@@ -38,7 +42,7 @@ async def security_middleware(request: Request, call_next):
     start_time = time.perf_counter()
 
     # Keep health checks available for monitoring.
-    if request.url.path != "/health":
+    if request.url.path not in {"/health", "/readiness"}:
         try:
             api_key = request.headers.get("X-API-Key")
 
@@ -81,6 +85,18 @@ async def security_middleware(request: Request, call_next):
             raise
 
     response = await call_next(request)
+    duration = time.perf_counter() - start_time
+
+    HTTP_REQUESTS_TOTAL.labels(
+        method=request.method,
+        path=request.url.path,
+        status=str(response.status_code),
+    ).inc()
+
+    HTTP_REQUEST_DURATION_SECONDS.labels(
+        method=request.method,
+        path=request.url.path,
+    ).observe(duration)
 
     logger.info(
         "HTTP request completed",
@@ -99,3 +115,16 @@ async def security_middleware(request: Request, call_next):
 def health_check() -> dict[str, str]:
     """Return the API health status."""
     return {"status": "healthy"}
+
+@app.get("/readiness")
+def readiness_check() -> dict[str, str]:
+    """Return whether the API is ready to process requests."""
+    return {"status": "ready"}
+
+@app.get("/metrics")
+def metrics():
+    """Expose Prometheus metrics."""
+    return Response(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST,
+    )

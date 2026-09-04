@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import os
 import json
 from pathlib import Path
 from threading import Lock
@@ -17,8 +17,9 @@ class AuditStore:
     this class is responsible for durable persistence and retrieval.
     """
 
-    def __init__(self, path: str | Path = "data/audit_events.jsonl") -> None:
-        self._path = Path(path)
+    def __init__(self, path: str | Path | None = None) -> None:
+        configured_path = path or os.getenv("AGENTPAY_AUDIT_PATH") or "data/audit_events.jsonl"
+        self._path = Path(configured_path)
         self._lock = Lock()
 
         self._path.parent.mkdir(parents=True, exist_ok=True)

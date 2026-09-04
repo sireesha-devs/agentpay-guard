@@ -1,0 +1,36 @@
+services:
+  agentpay-guard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: agentpay-guard:latest
+    container_name: agentpay-guard
+    restart: unless-stopped
+
+    ports:
+      - "8000:8000"
+
+    env_file:
+      - .env
+
+    environment:
+      AGENTPAY_AUDIT_PATH: /app/data/audit_events.jsonl
+
+    volumes:
+      - agentpay_audit_data:/app/data
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  agentpay_audit_data:

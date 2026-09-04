@@ -2,3 +2,8 @@ pydantic
 pytest
 fastapi
 httpx
+uvicorn
+prometheus-client
+ruff
+mypy
+bandit

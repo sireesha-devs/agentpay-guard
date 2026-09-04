@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from backend.app.main import app
 from backend.app.idempotency.store import idempotency_store
 from backend.app.webhooks.service import (
-    WebhookStatus,
+
     webhook_store,
 )
 

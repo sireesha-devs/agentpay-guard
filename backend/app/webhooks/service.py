@@ -6,6 +6,7 @@ import json
 import logging
 import time
 import urllib.request
+import urllib.parse
 from dataclasses import dataclass, field
 from enum import Enum
 from threading import Lock
@@ -137,6 +138,12 @@ def _send_webhook(
 ) -> None:
     """Send one webhook request."""
 
+    parsed_url = urllib.parse.urlparse(url)
+    if parsed_url.scheme not in {"http", "https"}:
+        raise ValueError("Webhook URL must use http or https")
+    if not parsed_url.netloc:
+        raise ValueError("Webhook URL must include a host")
+
     body = json.dumps(payload).encode("utf-8")
 
     request = urllib.request.Request(
@@ -149,7 +156,10 @@ def _send_webhook(
         },
     )
 
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with urllib.request.urlopen(  # nosec B310
+    request,
+    timeout=timeout,
+    ) as response:
         status_code = response.status
 
         if not 200 <= status_code < 300:
