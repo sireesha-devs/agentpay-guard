@@ -4,6 +4,6 @@ fastapi
 httpx
 uvicorn
 prometheus-client
-ruff
+ruff==0.12.0
 mypy
 bandit
